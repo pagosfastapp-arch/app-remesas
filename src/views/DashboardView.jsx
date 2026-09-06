@@ -1,6 +1,43 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 export default function DashboardView({ transacciones }) {
+  const [mostrarModalCierre, setMostrarModalCierre] = useState(false);
+  
+  const [cierres, setCierres] = useState(() => {
+    try {
+      const saved = localStorage.getItem('historial_cierres');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [idsCerrados, setIdsCerrados] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ids_transacciones_cerradas');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // SISTEMA DE AUTO-REPARACIÓN: Recupera ganancias atascadas o "huérfanas"
+  useEffect(() => {
+    if (cierres.length === 0 && idsCerrados.length > 0) {
+      setIdsCerrados([]);
+      localStorage.setItem('ids_transacciones_cerradas', JSON.stringify([]));
+    } else if (cierres.length > 0) {
+      const todosTienenKeys = cierres.every(c => Array.isArray(c.keysCerradas));
+      if (todosTienenKeys) {
+        const idsValidos = cierres.flatMap(c => c.keysCerradas);
+        if (idsCerrados.length !== idsValidos.length) {
+          setIdsCerrados(idsValidos);
+          localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(idsValidos));
+        }
+      }
+    }
+  }, [cierres, idsCerrados]);
+
   const totalCobrarProv = transacciones
     .filter(tx => (tx.estadoCobroProveedor || 'Pendiente') === 'Pendiente')
     .reduce((acc, tx) => acc + (parseFloat(tx.montoOrigen) || 0), 0);
@@ -15,41 +52,113 @@ export default function DashboardView({ transacciones }) {
       (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente'
     ).length;
 
-  // Utilidad acumulada solo de operaciones donde NINGUNA de las dos partes esté pendiente
-  const utilidadVesAcumulada = transacciones
-    .filter(tx => {
-      const divisaUpper = (tx.divisa || '').toUpperCase();
-      const esDirectoUSDT = ['BIZUM', 'MXN', 'EUROS', 'EUR'].includes(divisaUpper);
-      
-      const cobroPendiente = (tx.estadoCobroProveedor || 'Pendiente') === 'Pendiente';
-      const pagoPendiente = (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente';
-      
-      // Debe NO tener pendientes
-      return !esDirectoUSDT && !cobroPendiente && !pagoPendiente;
-    })
-    .reduce((acc, tx) => acc + (parseFloat(tx.utilidadNeta) || 0), 0);
+  const getTxKey = (tx, index) => tx.id || `tx-${index}-${tx.montoOrigen}-${tx.tasaCliente}`;
 
-  const utilidadUsdtAcumulada = transacciones
-    .filter(tx => {
+  const txCompletadasVes = transacciones
+    .map((tx, index) => ({ tx, index }))
+    .filter(({ tx, index }) => {
+      const key = getTxKey(tx, index);
+      if (idsCerrados.includes(key)) return false;
+
       const divisaUpper = (tx.divisa || '').toUpperCase();
       const esDirectoUSDT = ['BIZUM', 'MXN', 'EUROS', 'EUR'].includes(divisaUpper);
-      
       const cobroPendiente = (tx.estadoCobroProveedor || 'Pendiente') === 'Pendiente';
       const pagoPendiente = (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente';
-      
-      // Debe ser USDT directo y NO tener pendientes
+      return !esDirectoUSDT && !cobroPendiente && !pagoPendiente;
+    });
+
+  const utilidadVesAcumulada = txCompletadasVes.reduce((acc, { tx }) => acc + (parseFloat(tx.utilidadNeta) || 0), 0);
+
+  const txCompletadasUsdt = transacciones
+    .map((tx, index) => ({ tx, index }))
+    .filter(({ tx, index }) => {
+      const key = getTxKey(tx, index);
+      if (idsCerrados.includes(key)) return false;
+
+      const divisaUpper = (tx.divisa || '').toUpperCase();
+      const esDirectoUSDT = ['BIZUM', 'MXN', 'EUROS', 'EUR'].includes(divisaUpper);
+      const cobroPendiente = (tx.estadoCobroProveedor || 'Pendiente') === 'Pendiente';
+      const pagoPendiente = (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente';
       return esDirectoUSDT && !cobroPendiente && !pagoPendiente;
-    })
-    .reduce((acc, tx) => {
-      const tasaProv = parseFloat(tx.tasaProveedor) || 0;
-      const tasaClte = parseFloat(tx.tasaCliente) || 0;
-      const gananciaUsdt = tasaProv - tasaClte;
-      
-      return acc + gananciaUsdt;
-    }, 0);
+    });
+
+  const utilidadUsdtAcumulada = txCompletadasUsdt.reduce((acc, { tx }) => {
+    const tasaProv = parseFloat(tx.tasaProveedor) || 0;
+    const tasaClte = parseFloat(tx.tasaCliente) || 0;
+    return acc + (tasaProv - tasaClte);
+  }, 0);
+
+  const totalOpsCerrables = txCompletadasVes.length + txCompletadasUsdt.length;
+
+  const ejecutarCierre = () => {
+    if (totalOpsCerrables === 0 && utilidadVesAcumulada === 0 && utilidadUsdtAcumulada === 0) {
+      alert('No hay ganancias nuevas para cerrar en este momento.');
+      return;
+    }
+
+    const keysNuevas = [
+      ...txCompletadasVes.map(({ tx, index }) => getTxKey(tx, index)),
+      ...txCompletadasUsdt.map(({ tx, index }) => getTxKey(tx, index))
+    ];
+
+    const nuevoCierre = {
+      id: Date.now(),
+      fecha: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      opsCount: totalOpsCerrables,
+      ves: utilidadVesAcumulada,
+      usdt: utilidadUsdtAcumulada,
+      keysCerradas: keysNuevas,
+    };
+
+    const actualizadosIds = [...idsCerrados, ...keysNuevas];
+    const actualizadosCierres = [nuevoCierre, ...cierres];
+
+    setCierres(actualizadosCierres);
+    setIdsCerrados(actualizadosIds);
+
+    localStorage.setItem('historial_cierres', JSON.stringify(actualizadosCierres));
+    localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(actualizadosIds));
+
+    setMostrarModalCierre(false);
+    alert('¡Cierre realizado con éxito! Las ganancias se han reiniciado y guardado en el historial.');
+  };
+
+  const deshacerCierre = () => {
+    if (cierres.length === 0) return;
+    
+    // 🔒 NUEVA RESTRICCIÓN: Contabilidad Sana
+    if (totalOpsCerrables > 0) {
+      alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya existen operaciones procesadas en el turno actual.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones actuales.');
+      return;
+    }
+    
+    const ultimoCierre = cierres[0];
+    const keysLiberar = ultimoCierre.keysCerradas || [];
+    
+    const nuevosIdsCerrados = idsCerrados.filter(id => !keysLiberar.includes(id));
+    const nuevosCierres = cierres.slice(1);
+
+    setCierres(nuevosCierres);
+    setIdsCerrados(nuevosIdsCerrados);
+
+    localStorage.setItem('historial_cierres', JSON.stringify(nuevosCierres));
+    localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(nuevosIdsCerrados));
+
+    alert('¡Cierre deshecho con éxito! Las ganancias han sido devueltas al dashboard.');
+  };
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-6">
+      <div className="flex justify-end">
+        <button
+          onClick={() => setMostrarModalCierre(true)}
+          className="w-full sm:w-auto px-5 py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-semibold rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all active:scale-[0.98]"
+        >
+          <span>🔒</span>
+          <span>Realizar Cierre de Período</span>
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
         
         <div className="bg-slate-900/90 backdrop-blur-md p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-lg flex items-center justify-between active:scale-[0.99] transition-all">
@@ -70,7 +179,7 @@ export default function DashboardView({ transacciones }) {
 
         <div className="bg-slate-900/90 backdrop-blur-md p-4 sm:p-5 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-lg flex items-center justify-between active:scale-[0.99] transition-all">
           <div>
-            <p className="text-[11px] sm:text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Utilidad Neta Total</p>
+            <p className="text-[11px] sm:text-xs uppercase tracking-wider text-slate-400 font-semibold mb-1">Utilidad Neta Actual (Sin Cierre)</p>
             <div className="space-y-0.5 sm:space-y-1">
               <div className="text-sm sm:text-base font-bold text-emerald-400">{utilidadVesAcumulada.toFixed(2)} VES</div>
               <div className="text-sm sm:text-base font-bold text-cyan-400">{utilidadUsdtAcumulada.toFixed(2)} USDT</div>
@@ -89,12 +198,117 @@ export default function DashboardView({ transacciones }) {
 
       </div>
 
+      {/* Historial de Cierres */}
+      <div className="bg-slate-900/90 backdrop-blur-md p-5 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-lg space-y-4">
+        <h2 className="text-base sm:text-lg font-semibold text-white flex items-center gap-2">
+          <span>🗂️</span> Historial de Cierres Realizados
+        </h2>
+        {cierres.length === 0 ? (
+          <p className="text-xs sm:text-sm text-slate-400 italic">
+            Aún no hay cierres registrados. Realiza tu primer cierre para comenzar a acumular el historial.
+          </p>
+        ) : (
+          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+            {cierres.map((cierre, index) => {
+              const esUltimo = index === 0;
+
+              return (
+                <div key={cierre.id || index} className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-semibold text-emerald-400">Cierre #{cierres.length - index}</span>
+                      {esUltimo && (
+                        <button
+                          onClick={deshacerCierre}
+                          disabled={totalOpsCerrables > 0}
+                          title={totalOpsCerrables > 0 ? "Bloqueado por seguridad: Ya hay operaciones en el nuevo turno" : "Deshacer este cierre"}
+                          className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition-colors border shadow-sm ${
+                            totalOpsCerrables > 0 
+                              ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed opacity-70' 
+                              : 'bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border-red-500/30'
+                          }`}
+                        >
+                          {totalOpsCerrables > 0 ? '🔒 Cierre Bloqueado' : '↩️ Deshacer Cierre'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400">{cierre.fecha}</p>
+                    <p className="text-xs text-slate-300 mt-1">{cierre.opsCount} operaciones liquidadas</p>
+                  </div>
+                  <div className="text-left sm:text-right">
+                    <div className="text-sm font-bold text-emerald-400">{Number(cierre.ves).toFixed(2)} VES</div>
+                    <div className="text-sm font-bold text-cyan-400">{Number(cierre.usdt).toFixed(2)} USDT</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       <div className="bg-slate-900/90 backdrop-blur-md p-5 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-lg">
         <h2 className="text-base sm:text-lg font-semibold text-white mb-2">Resumen General del Negocio</h2>
         <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
           Monitorea el estado global de tus remesas, verifica saldos pendientes y gestiona tus cobros y pagos con una experiencia fluida y optimizada.
         </p>
       </div>
+
+      {mostrarModalCierre && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <span>📊</span> Confirmar Cierre de Período
+                </h3>
+                <p className="text-xs text-slate-400">Esto reiniciará las ganancias actuales del dashboard</p>
+              </div>
+              <button 
+                onClick={() => setMostrarModalCierre(false)}
+                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 flex justify-between items-center">
+                <span className="text-xs text-slate-400">Operaciones a cerrar:</span>
+                <span className="text-sm font-bold text-white">{totalOpsCerrables} operaciones</span>
+              </div>
+
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 space-y-1">
+                <span className="text-xs text-slate-400">Ganancia en VES a liquidar:</span>
+                <div className="text-xl font-extrabold text-emerald-400">{utilidadVesAcumulada.toFixed(2)} VES</div>
+              </div>
+
+              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 space-y-1">
+                <span className="text-xs text-slate-400">Ganancia en USDT a liquidar:</span>
+                <div className="text-xl font-extrabold text-cyan-400">{utilidadUsdtAcumulada.toFixed(2)} USDT</div>
+              </div>
+
+              <p className="text-[11px] text-amber-400/90 bg-amber-500/10 p-3 rounded-xl border border-amber-500/20 text-center">
+                ⚠️ Al confirmar, estas ganancias se archivarán en el historial y el contador del dashboard volverá a cero.
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setMostrarModalCierre(false)}
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold rounded-xl text-sm transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={ejecutarCierre}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm shadow-lg shadow-emerald-600/30 transition-all"
+              >
+                Confirmar y Reiniciar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
