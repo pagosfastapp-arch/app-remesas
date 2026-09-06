@@ -2,41 +2,38 @@ import React from 'react';
 
 export default function Navbar({ user, activeTab, setActiveTab, onLogout }) {
   const navItems = [
-    { id: 'dashboard', label: '📊 Dashboard' },
-    { id: 'registrar', label: '➕ Registrar Operación' },
-    { id: 'historial', label: '📋 Historial' },
-    { id: 'pendientes', label: '⏳ Pendientes' },
+    { id: 'dashboard', icon: '📊', label: 'Dashboard' },
+    { id: 'registrar', icon: '➕', label: 'Registrar' },
+    { id: 'historial', icon: '📋', label: 'Historial' },
+    { id: 'pendientes', icon: '⏳', label: 'Pendientes' },
   ];
 
   return (
-    <div className="bg-slate-800 p-4 rounded-2xl border border-slate-700 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Panel de Control Financiero</h1>
-        <p className="text-slate-400 text-xs">Usuario: <span className="text-blue-400">{user.email}</span></p>
-      </div>
-
-      <div className="flex flex-wrap gap-2 bg-slate-900 p-1.5 rounded-xl border border-slate-700">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 bg-slate-900/95 backdrop-blur-xl border-t border-slate-800 px-3 pt-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-2xl flex items-center justify-between gap-2">
+      <div className="flex items-center gap-1 flex-1">
         {navItems.map((item) => (
           <button
             key={item.id}
             onClick={() => setActiveTab(item.id)}
-            className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
+            className={`flex-1 py-1.5 px-1 rounded-xl text-[10px] sm:text-xs font-semibold transition-all flex flex-col items-center justify-center gap-0.5 ${
               activeTab === item.id 
-                ? 'bg-blue-600 text-white shadow-md' 
-                : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-600/30' 
+                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
             }`}
           >
-            {item.label}
+            <span className="text-base">{item.icon}</span>
+            <span className="truncate w-full text-center leading-tight">{item.label}</span>
           </button>
         ))}
       </div>
 
       <button 
         onClick={onLogout}
-        className="px-3 py-2 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white text-xs font-medium rounded-lg transition-colors border border-red-500/30"
+        title="Cerrar Sesión"
+        className="p-2.5 bg-red-600/10 hover:bg-red-600 text-red-400 hover:text-white text-xs font-medium rounded-xl transition-colors border border-red-500/20 flex items-center justify-center shrink-0"
       >
-        Cerrar Sesión
+        🚪
       </button>
-    </div>
+    </nav>
   );
 }
