@@ -113,6 +113,16 @@ export default function DashboardView({
     }
   };
 
+  // 5. Función para eliminar cualquier cierre fantasma/vacío de forma específica
+  const eliminarCierreEspecifico = async (cierreId, e) => {
+    e.stopPropagation();
+    if (!window.confirm('¿Seguro que deseas eliminar este registro de cierre vacío?')) return;
+    
+    if (onDeshacerCierre) {
+      await onDeshacerCierre(cierreId);
+    }
+  };
+
   return (
     <div className="space-y-4 sm:space-y-6 pb-6">
       <div className="flex justify-end">
@@ -177,13 +187,26 @@ export default function DashboardView({
           <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
             {cierres.map((cierre, index) => {
               const esUltimo = index === 0;
+              // Detectar si el cierre está vacío (no tiene keysCerradas o está vacío, y sus montos son 0 o nulos)
+              const keysVacias = !cierre.keysCerradas || cierre.keysCerradas.length === 0;
+              const sinMontos = (!cierre.ves || cierre.ves === 0) && (!cierre.usdt || cierre.usdt === 0);
+              const esVacio = keysVacias && sinMontos;
 
               return (
                 <div key={cierre.id || index} className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800/80 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-xs font-semibold text-emerald-400">Cierre #{cierres.length - index}</span>
-                      {esUltimo && (
+                      
+                      {esVacio ? (
+                        <button
+                          onClick={(e) => eliminarCierreEspecifico(cierre.id, e)}
+                          title="Eliminar cierre vacío"
+                          className="px-2.5 py-1 text-[10px] font-bold rounded-lg transition-colors border shadow-sm bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border-red-500/30 flex items-center gap-1"
+                        >
+                          <span>🗑️</span> Eliminar Vacío
+                        </button>
+                      ) : esUltimo && (
                         <button
                           onClick={deshacerCierre}
                           disabled={totalOpsCerrables > 0}
@@ -198,12 +221,12 @@ export default function DashboardView({
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-slate-400">{cierre.fecha}</p>
-                    <p className="text-xs text-slate-300 mt-1">{cierre.opsCount} operaciones liquidadas</p>
+                    <p className="text-xs text-slate-400">{cierre.fecha || 'Fecha no registrada'}</p>
+                    <p className="text-xs text-slate-300 mt-1">{cierre.opsCount || 0} operaciones liquidadas</p>
                   </div>
                   <div className="text-left sm:text-right">
-                    <div className="text-sm font-bold text-emerald-400">{Number(cierre.ves).toFixed(2)} VES</div>
-                    <div className="text-sm font-bold text-cyan-400">{Number(cierre.usdt).toFixed(2)} USDT</div>
+                    <div className="text-sm font-bold text-emerald-400">{Number(cierre.ves || 0).toFixed(2)} VES</div>
+                    <div className="text-sm font-bold text-cyan-400">{Number(cierre.usdt || 0).toFixed(2)} USDT</div>
                   </div>
                 </div>
               );
