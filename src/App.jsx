@@ -37,7 +37,7 @@ export default function App() {
 
   // Estados de Transacciones y Cierres
   const [transacciones, setTransacciones] = useState([]);
-  const [cierres, setCierres] = useState([]); // <--- NUEVO ESTADO PARA CIERRES
+  const [cierres, setCierres] = useState([]);
   const [guardando, setGuardando] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
 
@@ -50,7 +50,7 @@ export default function App() {
       setUser(currentUser);
       if (currentUser) {
         cargarTransacciones();
-        cargarCierres(); // <--- AHORA TAMBIÉN CARGAMOS LOS CIERRES AL ENTRAR
+        cargarCierres();
       }
     });
     return () => unsubscribe();
@@ -78,69 +78,67 @@ export default function App() {
     }
   };
 
-  // --- FUNCIÓN MEJORADA CON MIGRACIÓN AUTOMÁTICA DESDE EL TELÉFONO ---
+  // --- FUNCIÓN INTELIGENTE DE MIGRACIÓN GLOBAL ---
   const cargarCierres = async () => {
     try {
-      // 1. Intentar cargar desde Firebase
+      // 1. Cargar desde Firebase primero
       const q = query(collection(db, 'cierres'), orderBy('fechaGuardado', 'desc'));
       const querySnapshot = await getDocs(q);
       const cierresFirebase = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-      // 2. Verificar si el teléfono tiene cierres viejos en localStorage
-      const claveLocal = localStorage.getItem('cierres_guardados') ? 'cierres_guardados' : 
-                         localStorage.getItem('cierres') ? 'cierres' : null;
-
-      if (claveLocal) {
-        const cierresLocales = JSON.parse(localStorage.getItem(claveLocal) || '[]');
+      // 2. Escanear todo el localStorage buscando listas de datos guardadas en el teléfono
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
         
-        if (Array.isArray(cierresLocales) && cierresLocales.length > 0) {
-          console.log("Migrando cierres del teléfono a Firebase...");
-          
-          // Subir cada cierre local a Firebase
-          for (const cierre of cierresLocales) {
-            await addDoc(collection(db, 'cierres'), {
-              ...cierre,
-              fechaGuardado: serverTimestamp()
-            });
+        if (key && !key.includes('firebase') && !key.includes('authUser')) {
+          try {
+            const rawData = localStorage.getItem(key);
+            const parsedData = JSON.parse(rawData);
+
+            if (Array.isArray(parsedData) && parsedData.length > 0) {
+              console.log(`¡Datos encontrados en la clave local: "${key}"! Migrando a Firebase...`);
+
+              for (const cierre of parsedData) {
+                await addDoc(collection(db, 'cierres'), {
+                  ...cierre,
+                  fechaGuardado: serverTimestamp()
+                });
+              }
+
+              localStorage.removeItem(key);
+              return cargarCierres();
+            }
+          } catch (e) {
+            // Ignorar claves que no sean JSON válidos
           }
-
-          // Borrar de la memoria local para no duplicar en el futuro
-          localStorage.removeItem(claveLocal);
-
-          // Recargar de nuevo desde Firebase con los datos subidos
-          return cargarCierres();
         }
       }
 
-      // 3. Actualizar el estado con los cierres de Firebase
+      // 3. Actualizar el estado con lo que hay en Firebase
       setCierres(cierresFirebase);
     } catch (err) {
       console.error("Error cargando cierres:", err);
     }
   };
 
-  // --- NUEVA FUNCIÓN: GUARDAR CIERRE EN FIREBASE ---
   const handleGuardarCierre = async (nuevoCierre) => {
     try {
-      // Agregamos un timestamp del servidor para poder ordenarlos fácilmente
       const cierreData = {
         ...nuevoCierre,
         fechaGuardado: serverTimestamp()
       };
-      // Guardamos en una nueva colección llamada 'cierres'
       await addDoc(collection(db, 'cierres'), cierreData);
-      cargarCierres(); // Recargamos para actualizar el estado
+      cargarCierres();
     } catch (err) {
       console.error("Error al guardar el cierre:", err);
       alert("Hubo un error al sincronizar el cierre en la nube.");
     }
   };
 
-  // --- NUEVA FUNCIÓN: ELIMINAR CIERRE EN FIREBASE ---
   const handleDeshacerCierre = async (idCierre) => {
     try {
       await deleteDoc(doc(db, 'cierres', idCierre));
-      cargarCierres(); // Recargamos para actualizar el estado
+      cargarCierres();
     } catch (err) {
       console.error("Error al deshacer el cierre:", err);
       alert("Hubo un error al eliminar el cierre de la nube.");
@@ -268,7 +266,6 @@ export default function App() {
           onLogout={() => signOut(auth)} 
         />
 
-        {/* --- AQUÍ CONECTAMOS EL DASHBOARD CON LOS CIERRES DE FIREBASE --- */}
         {activeTab === 'dashboard' && (
           <DashboardView 
             transacciones={transacciones} 
