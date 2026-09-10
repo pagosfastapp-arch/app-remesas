@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
 
-// 1. Ahora recibimos "cierres" y las funciones para guardar/eliminar desde la nube como "props"
 export default function DashboardView({ 
   transacciones, 
-  cierres = [], // Viene de la base de datos
-  onGuardarCierre, // Función para guardar en la base de datos
-  onDeshacerCierre // Función para eliminar de la base de datos
+  cierres = [], 
+  onGuardarCierre, 
+  onDeshacerCierre 
 }) {
   const [mostrarModalCierre, setMostrarModalCierre] = useState(false);
   
-  // 2. Calculamos los idsCerrados automáticamente a partir de los cierres que vienen de la nube.
-  // Ya no usamos useEffect ni localStorage para esto, es automático y en tiempo real.
   const idsCerrados = cierres.flatMap(c => c.keysCerradas || []);
 
   const totalCobrarProv = transacciones
@@ -77,7 +74,7 @@ export default function DashboardView({
     ];
 
     const nuevoCierre = {
-      id: Date.now().toString(), // Convertido a string para compatibilidad con BD
+      id: Date.now().toString(),
       fecha: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       opsCount: totalOpsCerrables,
       ves: utilidadVesAcumulada,
@@ -85,7 +82,6 @@ export default function DashboardView({
       keysCerradas: keysNuevas,
     };
 
-    // 3. Llamamos a la función de la nube
     if (onGuardarCierre) {
       await onGuardarCierre(nuevoCierre);
       setMostrarModalCierre(false);
@@ -95,31 +91,30 @@ export default function DashboardView({
     }
   };
 
-  const deshacerCierre = async () => {
+  const deshacerCierre = async (cierreEspecificoId = null) => {
     if (cierres.length === 0) return;
     
-    if (totalOpsCerrables > 0) {
+    // Si se pasa un ID específico (como un cierre vacío), lo eliminamos directamente sin bloquear
+    const idAEliminar = cierreEspecificoId || cierres[0]?.id;
+    const cierreObj = cierres.find(c => c.id === idAEliminar) || cierres[0];
+
+    const keysVacias = !cierreObj.keysCerradas || cierreObj.keysCerradas.length === 0;
+    const sinMontos = (!cierreObj.ves || cierreObj.ves === 0) && (!cierreObj.usdt || cierreObj.usdt === 0);
+    const esVacio = keysVacias && sinMontos;
+
+    // Solo aplicamos la traba de seguridad si hay operaciones nuevas Y el cierre NO es un cierre fantasma/vacío
+    if (!cierreEspecificoId && totalOpsCerrables > 0 && !esVacio) {
       alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya existen operaciones procesadas en el turno actual.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones actuales.');
       return;
     }
-    
-    // Asumimos que los cierres vienen ordenados desde el más reciente al más antiguo
-    const ultimoCierre = cierres[0]; 
-    
-    // 4. Llamamos a la función de eliminar en la nube
-    if (onDeshacerCierre) {
-      await onDeshacerCierre(ultimoCierre.id);
-      alert('¡Cierre deshecho y sincronizado en todos los dispositivos!');
-    }
-  };
 
-  // 5. Función para eliminar cualquier cierre fantasma/vacío de forma específica
-  const eliminarCierreEspecifico = async (cierreId, e) => {
-    e.stopPropagation();
-    if (!window.confirm('¿Seguro que deseas eliminar este registro de cierre vacío?')) return;
+    if (cierreEspecificoId && !window.confirm('¿Seguro que deseas eliminar este registro de cierre vacío?')) {
+      return;
+    }
     
     if (onDeshacerCierre) {
-      await onDeshacerCierre(cierreId);
+      await onDeshacerCierre(idAEliminar);
+      alert(esVacio ? '¡Cierre vacío eliminado con éxito!' : '¡Cierre deshecho y sincronizado en todos los dispositivos!');
     }
   };
 
@@ -187,7 +182,6 @@ export default function DashboardView({
           <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
             {cierres.map((cierre, index) => {
               const esUltimo = index === 0;
-              // Detectar si el cierre está vacío (no tiene keysCerradas o está vacío, y sus montos son 0 o nulos)
               const keysVacias = !cierre.keysCerradas || cierre.keysCerradas.length === 0;
               const sinMontos = (!cierre.ves || cierre.ves === 0) && (!cierre.usdt || cierre.usdt === 0);
               const esVacio = keysVacias && sinMontos;
@@ -200,7 +194,10 @@ export default function DashboardView({
                       
                       {esVacio ? (
                         <button
-                          onClick={(e) => eliminarCierreEspecifico(cierre.id, e)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deshacerCierre(cierre.id);
+                          }}
                           title="Eliminar cierre vacío"
                           className="px-2.5 py-1 text-[10px] font-bold rounded-lg transition-colors border shadow-sm bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border-red-500/30 flex items-center gap-1"
                         >
@@ -208,7 +205,7 @@ export default function DashboardView({
                         </button>
                       ) : esUltimo && (
                         <button
-                          onClick={deshacerCierre}
+                          onClick={() => deshacerCierre()}
                           disabled={totalOpsCerrables > 0}
                           title={totalOpsCerrables > 0 ? "Bloqueado por seguridad: Ya hay operaciones en el nuevo turno" : "Deshacer este cierre"}
                           className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition-colors border shadow-sm ${
