@@ -24,7 +24,7 @@ export default function DashboardView({
       (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente'
     ).length;
 
-  // Clave estable basada en propiedades únicas (sin depender del índice del array para evitar desincronizaciones)
+  // Clave estable basada en ID o propiedades únicas
   const getTxKey = (tx) => tx.id || `${tx.fecha || ''}-${tx.montoOrigen || ''}-${tx.tasaCliente || ''}-${tx.pagoVesCliente || ''}`;
 
   const txCompletadasVes = transacciones
@@ -63,7 +63,6 @@ export default function DashboardView({
 
   const totalOpsCerrables = txCompletadasVes.length + txCompletadasUsdt.length;
 
-  // Verificación exacta de si se han registrado operaciones nuevas después del último cierre
   const ultimoCierre = cierres[0];
   const seRegistraronOpsDespues = ultimoCierre ? (
     ultimoCierre.totalTransaccionesAlCerrar !== undefined 
@@ -89,23 +88,36 @@ export default function DashboardView({
       ves: utilidadVesAcumulada,
       usdt: utilidadUsdtAcumulada,
       keysCerradas: keysNuevas,
-      totalTransaccionesAlCerrar: transacciones.length, // Almacenamos el total exacto de transacciones al momento del cierre
+      totalTransaccionesAlCerrar: transacciones.length,
     };
 
     if (onGuardarCierre) {
-      await onGuardarCierre(nuevoCierre);
-      setMostrarModalCierre(false);
-      alert('¡Cierre sincronizado con éxito en todos los dispositivos!');
+      try {
+        await onGuardarCierre(nuevoCierre);
+        setMostrarModalCierre(false);
+        alert('¡Cierre sincronizado con éxito en todos los dispositivos!');
+      } catch (error) {
+        console.error('Error al guardar cierre:', error);
+        alert('Hubo un error al guardar el cierre en la nube.');
+      }
     } else {
       alert('Error: La función de guardado en la nube no está conectada.');
     }
   };
 
   const deshacerCierre = async (cierreEspecificoId = null) => {
-    if (cierres.length === 0) return;
+    if (!cierres || cierres.length === 0) {
+      alert('No hay cierres registrados para deshacer.');
+      return;
+    }
     
     const idAEliminar = cierreEspecificoId || ultimoCierre?.id;
     const cierreObj = cierres.find(c => c.id === idAEliminar) || ultimoCierre;
+
+    if (!cierreObj) {
+      alert('No se encontró el registro del cierre.');
+      return;
+    }
 
     const keysVacias = !cierreObj.keysCerradas || cierreObj.keysCerradas.length === 0;
     const sinMontos = (!cierreObj.ves || cierreObj.ves === 0) && (!cierreObj.usdt || cierreObj.usdt === 0);
@@ -115,7 +127,7 @@ export default function DashboardView({
       ? transacciones.length > cierreObj.totalTransaccionesAlCerrar 
       : totalOpsCerrables > 0;
 
-    // Traba de seguridad: Solo se permite deshacer si no se han registrado operaciones después del cierre
+    // Validación de seguridad
     if (!cierreEspecificoId && hayOpsDespues && !esVacio) {
       alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya se han registrado nuevas operaciones después de este cierre.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones añadidas.');
       return;
@@ -126,8 +138,15 @@ export default function DashboardView({
     }
     
     if (onDeshacerCierre) {
-      await onDeshacerCierre(idAEliminar);
-      alert(esVacio ? '¡Cierre vacío eliminado con éxito!' : '¡Cierre deshecho con éxito! Las operaciones han regresado al dashboard.');
+      try {
+        await onDeshacerCierre(idAEliminar);
+        alert(esVacio ? '¡Cierre vacío eliminado con éxito!' : '¡Cierre deshecho con éxito! Las operaciones han regresado al dashboard.');
+      } catch (error) {
+        console.error('Error al deshacer el cierre:', error);
+        alert('Hubo un error al intentar deshacer el cierre en la base de datos.');
+      }
+    } else {
+      alert('Error: La función onDeshacerCierre no está conectada desde el componente principal.');
     }
   };
 
