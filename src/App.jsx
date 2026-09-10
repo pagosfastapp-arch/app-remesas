@@ -78,13 +78,42 @@ export default function App() {
     }
   };
 
-  // --- NUEVA FUNCIÓN: CARGAR CIERRES DESDE FIREBASE ---
+  // --- FUNCIÓN MEJORADA CON MIGRACIÓN AUTOMÁTICA DESDE EL TELÉFONO ---
   const cargarCierres = async () => {
     try {
-      // Ordenamos por fecha de guardado de más reciente a más antiguo
+      // 1. Intentar cargar desde Firebase
       const q = query(collection(db, 'cierres'), orderBy('fechaGuardado', 'desc'));
       const querySnapshot = await getDocs(q);
-      setCierres(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+      const cierresFirebase = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+      // 2. Verificar si el teléfono tiene cierres viejos en localStorage
+      const claveLocal = localStorage.getItem('cierres_guardados') ? 'cierres_guardados' : 
+                         localStorage.getItem('cierres') ? 'cierres' : null;
+
+      if (claveLocal) {
+        const cierresLocales = JSON.parse(localStorage.getItem(claveLocal) || '[]');
+        
+        if (Array.isArray(cierresLocales) && cierresLocales.length > 0) {
+          console.log("Migrando cierres del teléfono a Firebase...");
+          
+          // Subir cada cierre local a Firebase
+          for (const cierre of cierresLocales) {
+            await addDoc(collection(db, 'cierres'), {
+              ...cierre,
+              fechaGuardado: serverTimestamp()
+            });
+          }
+
+          // Borrar de la memoria local para no duplicar en el futuro
+          localStorage.removeItem(claveLocal);
+
+          // Recargar de nuevo desde Firebase con los datos subidos
+          return cargarCierres();
+        }
+      }
+
+      // 3. Actualizar el estado con los cierres de Firebase
+      setCierres(cierresFirebase);
     } catch (err) {
       console.error("Error cargando cierres:", err);
     }
