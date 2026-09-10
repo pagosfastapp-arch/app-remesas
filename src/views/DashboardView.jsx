@@ -1,42 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
-export default function DashboardView({ transacciones }) {
+// 1. Ahora recibimos "cierres" y las funciones para guardar/eliminar desde la nube como "props"
+export default function DashboardView({ 
+  transacciones, 
+  cierres = [], // Viene de la base de datos
+  onGuardarCierre, // Función para guardar en la base de datos
+  onDeshacerCierre // Función para eliminar de la base de datos
+}) {
   const [mostrarModalCierre, setMostrarModalCierre] = useState(false);
   
-  const [cierres, setCierres] = useState(() => {
-    try {
-      const saved = localStorage.getItem('historial_cierres');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [idsCerrados, setIdsCerrados] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ids_transacciones_cerradas');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  // SISTEMA DE AUTO-REPARACIÓN: Recupera ganancias atascadas o "huérfanas"
-  useEffect(() => {
-    if (cierres.length === 0 && idsCerrados.length > 0) {
-      setIdsCerrados([]);
-      localStorage.setItem('ids_transacciones_cerradas', JSON.stringify([]));
-    } else if (cierres.length > 0) {
-      const todosTienenKeys = cierres.every(c => Array.isArray(c.keysCerradas));
-      if (todosTienenKeys) {
-        const idsValidos = cierres.flatMap(c => c.keysCerradas);
-        if (idsCerrados.length !== idsValidos.length) {
-          setIdsCerrados(idsValidos);
-          localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(idsValidos));
-        }
-      }
-    }
-  }, [cierres, idsCerrados]);
+  // 2. Calculamos los idsCerrados automáticamente a partir de los cierres que vienen de la nube.
+  // Ya no usamos useEffect ni localStorage para esto, es automático y en tiempo real.
+  const idsCerrados = cierres.flatMap(c => c.keysCerradas || []);
 
   const totalCobrarProv = transacciones
     .filter(tx => (tx.estadoCobroProveedor || 'Pendiente') === 'Pendiente')
@@ -90,7 +65,7 @@ export default function DashboardView({ transacciones }) {
 
   const totalOpsCerrables = txCompletadasVes.length + txCompletadasUsdt.length;
 
-  const ejecutarCierre = () => {
+  const ejecutarCierre = async () => {
     if (totalOpsCerrables === 0 && utilidadVesAcumulada === 0 && utilidadUsdtAcumulada === 0) {
       alert('No hay ganancias nuevas para cerrar en este momento.');
       return;
@@ -102,7 +77,7 @@ export default function DashboardView({ transacciones }) {
     ];
 
     const nuevoCierre = {
-      id: Date.now(),
+      id: Date.now().toString(), // Convertido a string para compatibilidad con BD
       fecha: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       opsCount: totalOpsCerrables,
       ves: utilidadVesAcumulada,
@@ -110,41 +85,32 @@ export default function DashboardView({ transacciones }) {
       keysCerradas: keysNuevas,
     };
 
-    const actualizadosIds = [...idsCerrados, ...keysNuevas];
-    const actualizadosCierres = [nuevoCierre, ...cierres];
-
-    setCierres(actualizadosCierres);
-    setIdsCerrados(actualizadosIds);
-
-    localStorage.setItem('historial_cierres', JSON.stringify(actualizadosCierres));
-    localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(actualizadosIds));
-
-    setMostrarModalCierre(false);
-    alert('¡Cierre realizado con éxito! Las ganancias se han reiniciado y guardado en el historial.');
+    // 3. Llamamos a la función de la nube
+    if (onGuardarCierre) {
+      await onGuardarCierre(nuevoCierre);
+      setMostrarModalCierre(false);
+      alert('¡Cierre sincronizado con éxito en todos los dispositivos!');
+    } else {
+      alert('Error: La función de guardado en la nube no está conectada.');
+    }
   };
 
-  const deshacerCierre = () => {
+  const deshacerCierre = async () => {
     if (cierres.length === 0) return;
     
-    // 🔒 NUEVA RESTRICCIÓN: Contabilidad Sana
     if (totalOpsCerrables > 0) {
       alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya existen operaciones procesadas en el turno actual.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones actuales.');
       return;
     }
     
-    const ultimoCierre = cierres[0];
-    const keysLiberar = ultimoCierre.keysCerradas || [];
+    // Asumimos que los cierres vienen ordenados desde el más reciente al más antiguo
+    const ultimoCierre = cierres[0]; 
     
-    const nuevosIdsCerrados = idsCerrados.filter(id => !keysLiberar.includes(id));
-    const nuevosCierres = cierres.slice(1);
-
-    setCierres(nuevosCierres);
-    setIdsCerrados(nuevosIdsCerrados);
-
-    localStorage.setItem('historial_cierres', JSON.stringify(nuevosCierres));
-    localStorage.setItem('ids_transacciones_cerradas', JSON.stringify(nuevosIdsCerrados));
-
-    alert('¡Cierre deshecho con éxito! Las ganancias han sido devueltas al dashboard.');
+    // 4. Llamamos a la función de eliminar en la nube
+    if (onDeshacerCierre) {
+      await onDeshacerCierre(ultimoCierre.id);
+      alert('¡Cierre deshecho y sincronizado en todos los dispositivos!');
+    }
   };
 
   return (
@@ -246,13 +212,6 @@ export default function DashboardView({ transacciones }) {
         )}
       </div>
 
-      <div className="bg-slate-900/90 backdrop-blur-md p-5 sm:p-6 rounded-2xl sm:rounded-3xl border border-slate-800 shadow-lg">
-        <h2 className="text-base sm:text-lg font-semibold text-white mb-2">Resumen General del Negocio</h2>
-        <p className="text-xs sm:text-sm text-slate-400 leading-relaxed">
-          Monitorea el estado global de tus remesas, verifica saldos pendientes y gestiona tus cobros y pagos con una experiencia fluida y optimizada.
-        </p>
-      </div>
-
       {mostrarModalCierre && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-5">
@@ -288,7 +247,7 @@ export default function DashboardView({ transacciones }) {
               </div>
 
               <p className="text-[11px] text-amber-400/90 bg-amber-500/10 p-3 rounded-xl border border-amber-500/20 text-center">
-                ⚠️ Al confirmar, estas ganancias se archivarán en el historial y el contador del dashboard volverá a cero.
+                ⚠️ Al confirmar, estas ganancias se archivarán en la base de datos y el dashboard volverá a cero en todos los equipos.
               </p>
             </div>
 
@@ -303,7 +262,7 @@ export default function DashboardView({ transacciones }) {
                 onClick={ejecutarCierre}
                 className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm shadow-lg shadow-emerald-600/30 transition-all"
               >
-                Confirmar y Reiniciar
+                Confirmar y Sincronizar
               </button>
             </div>
           </div>

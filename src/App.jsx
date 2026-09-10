@@ -35,7 +35,9 @@ export default function App() {
   const [estadoCobroProveedor, setEstadoCobroProveedor] = useState('Pendiente');
   const [estadoPagoCliente, setEstadoPagoCliente] = useState('Pendiente');
 
+  // Estados de Transacciones y Cierres
   const [transacciones, setTransacciones] = useState([]);
+  const [cierres, setCierres] = useState([]); // <--- NUEVO ESTADO PARA CIERRES
   const [guardando, setGuardando] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
 
@@ -46,7 +48,10 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((currentUser) => {
       setUser(currentUser);
-      if (currentUser) cargarTransacciones();
+      if (currentUser) {
+        cargarTransacciones();
+        cargarCierres(); // <--- AHORA TAMBIÉN CARGAMOS LOS CIERRES AL ENTRAR
+      }
     });
     return () => unsubscribe();
   }, []);
@@ -70,6 +75,46 @@ export default function App() {
       setTransacciones(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     } catch (err) {
       console.error("Error cargando transacciones:", err);
+    }
+  };
+
+  // --- NUEVA FUNCIÓN: CARGAR CIERRES DESDE FIREBASE ---
+  const cargarCierres = async () => {
+    try {
+      // Ordenamos por fecha de guardado de más reciente a más antiguo
+      const q = query(collection(db, 'cierres'), orderBy('fechaGuardado', 'desc'));
+      const querySnapshot = await getDocs(q);
+      setCierres(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    } catch (err) {
+      console.error("Error cargando cierres:", err);
+    }
+  };
+
+  // --- NUEVA FUNCIÓN: GUARDAR CIERRE EN FIREBASE ---
+  const handleGuardarCierre = async (nuevoCierre) => {
+    try {
+      // Agregamos un timestamp del servidor para poder ordenarlos fácilmente
+      const cierreData = {
+        ...nuevoCierre,
+        fechaGuardado: serverTimestamp()
+      };
+      // Guardamos en una nueva colección llamada 'cierres'
+      await addDoc(collection(db, 'cierres'), cierreData);
+      cargarCierres(); // Recargamos para actualizar el estado
+    } catch (err) {
+      console.error("Error al guardar el cierre:", err);
+      alert("Hubo un error al sincronizar el cierre en la nube.");
+    }
+  };
+
+  // --- NUEVA FUNCIÓN: ELIMINAR CIERRE EN FIREBASE ---
+  const handleDeshacerCierre = async (idCierre) => {
+    try {
+      await deleteDoc(doc(db, 'cierres', idCierre));
+      cargarCierres(); // Recargamos para actualizar el estado
+    } catch (err) {
+      console.error("Error al deshacer el cierre:", err);
+      alert("Hubo un error al eliminar el cierre de la nube.");
     }
   };
 
@@ -194,7 +239,15 @@ export default function App() {
           onLogout={() => signOut(auth)} 
         />
 
-        {activeTab === 'dashboard' && <DashboardView transacciones={transacciones} />}
+        {/* --- AQUÍ CONECTAMOS EL DASHBOARD CON LOS CIERRES DE FIREBASE --- */}
+        {activeTab === 'dashboard' && (
+          <DashboardView 
+            transacciones={transacciones} 
+            cierres={cierres}
+            onGuardarCierre={handleGuardarCierre}
+            onDeshacerCierre={handleDeshacerCierre}
+          />
+        )}
         
         {activeTab === 'registrar' && (
           <RegistrarView 
