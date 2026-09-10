@@ -137,7 +137,13 @@ export default function App() {
 
   const handleDeshacerCierre = async (idCierre) => {
     try {
+      // 1. Eliminar de Firebase
       await deleteDoc(doc(db, 'cierres', idCierre));
+      
+      // 2. CORRECCIÓN CLAVE: Actualizar el estado local inmediatamente para que la UI se refresque al instante
+      setCierres(prevCierres => prevCierres.filter(cierre => cierre.id !== idCierre));
+      
+      // Opcional: Sincronizar de fondo por si acaso
       cargarCierres();
     } catch (err) {
       console.error("Error al deshacer el cierre:", err);
