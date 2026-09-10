@@ -24,12 +24,13 @@ export default function DashboardView({
       (tx.estadoPagoCliente || 'Pendiente') === 'Pendiente'
     ).length;
 
-  const getTxKey = (tx, index) => tx.id || `tx-${index}-${tx.montoOrigen}-${tx.tasaCliente}`;
+  // Clave estable basada en propiedades únicas (sin depender del índice del array para evitar desincronizaciones)
+  const getTxKey = (tx) => tx.id || `${tx.fecha || ''}-${tx.montoOrigen || ''}-${tx.tasaCliente || ''}-${tx.pagoVesCliente || ''}`;
 
   const txCompletadasVes = transacciones
-    .map((tx, index) => ({ tx, index }))
-    .filter(({ tx, index }) => {
-      const key = getTxKey(tx, index);
+    .map(tx => ({ tx }))
+    .filter(({ tx }) => {
+      const key = getTxKey(tx);
       if (idsCerrados.includes(key)) return false;
 
       const divisaUpper = (tx.divisa || '').toUpperCase();
@@ -42,9 +43,9 @@ export default function DashboardView({
   const utilidadVesAcumulada = txCompletadasVes.reduce((acc, { tx }) => acc + (parseFloat(tx.utilidadNeta) || 0), 0);
 
   const txCompletadasUsdt = transacciones
-    .map((tx, index) => ({ tx, index }))
-    .filter(({ tx, index }) => {
-      const key = getTxKey(tx, index);
+    .map(tx => ({ tx }))
+    .filter(({ tx }) => {
+      const key = getTxKey(tx);
       if (idsCerrados.includes(key)) return false;
 
       const divisaUpper = (tx.divisa || '').toUpperCase();
@@ -62,6 +63,14 @@ export default function DashboardView({
 
   const totalOpsCerrables = txCompletadasVes.length + txCompletadasUsdt.length;
 
+  // Verificación exacta de si se han registrado operaciones nuevas después del último cierre
+  const ultimoCierre = cierres[0];
+  const seRegistraronOpsDespues = ultimoCierre ? (
+    ultimoCierre.totalTransaccionesAlCerrar !== undefined 
+      ? transacciones.length > ultimoCierre.totalTransaccionesAlCerrar 
+      : totalOpsCerrables > 0
+  ) : false;
+
   const ejecutarCierre = async () => {
     if (totalOpsCerrables === 0 && utilidadVesAcumulada === 0 && utilidadUsdtAcumulada === 0) {
       alert('No hay ganancias nuevas para cerrar en este momento.');
@@ -69,8 +78,8 @@ export default function DashboardView({
     }
 
     const keysNuevas = [
-      ...txCompletadasVes.map(({ tx, index }) => getTxKey(tx, index)),
-      ...txCompletadasUsdt.map(({ tx, index }) => getTxKey(tx, index))
+      ...txCompletadasVes.map(({ tx }) => getTxKey(tx)),
+      ...txCompletadasUsdt.map(({ tx }) => getTxKey(tx))
     ];
 
     const nuevoCierre = {
@@ -80,6 +89,7 @@ export default function DashboardView({
       ves: utilidadVesAcumulada,
       usdt: utilidadUsdtAcumulada,
       keysCerradas: keysNuevas,
+      totalTransaccionesAlCerrar: transacciones.length, // Almacenamos el total exacto de transacciones al momento del cierre
     };
 
     if (onGuardarCierre) {
@@ -94,17 +104,20 @@ export default function DashboardView({
   const deshacerCierre = async (cierreEspecificoId = null) => {
     if (cierres.length === 0) return;
     
-    // Si se pasa un ID específico (como un cierre vacío), lo eliminamos directamente sin bloquear
-    const idAEliminar = cierreEspecificoId || cierres[0]?.id;
-    const cierreObj = cierres.find(c => c.id === idAEliminar) || cierres[0];
+    const idAEliminar = cierreEspecificoId || ultimoCierre?.id;
+    const cierreObj = cierres.find(c => c.id === idAEliminar) || ultimoCierre;
 
     const keysVacias = !cierreObj.keysCerradas || cierreObj.keysCerradas.length === 0;
     const sinMontos = (!cierreObj.ves || cierreObj.ves === 0) && (!cierreObj.usdt || cierreObj.usdt === 0);
     const esVacio = keysVacias && sinMontos;
 
-    // Solo aplicamos la traba de seguridad si hay operaciones nuevas Y el cierre NO es un cierre fantasma/vacío
-    if (!cierreEspecificoId && totalOpsCerrables > 0 && !esVacio) {
-      alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya existen operaciones procesadas en el turno actual.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones actuales.');
+    const hayOpsDespues = cierreObj.totalTransaccionesAlCerrar !== undefined 
+      ? transacciones.length > cierreObj.totalTransaccionesAlCerrar 
+      : totalOpsCerrables > 0;
+
+    // Traba de seguridad: Solo se permite deshacer si no se han registrado operaciones después del cierre
+    if (!cierreEspecificoId && hayOpsDespues && !esVacio) {
+      alert('⛔ ACCIÓN DENEGADA:\nNo se puede deshacer el cierre anterior porque ya se han registrado nuevas operaciones después de este cierre.\n\nPara mantener una contabilidad sana y evitar alteraciones en los saldos, debes realizar un nuevo cierre o eliminar las operaciones añadidas.');
       return;
     }
 
@@ -114,7 +127,7 @@ export default function DashboardView({
     
     if (onDeshacerCierre) {
       await onDeshacerCierre(idAEliminar);
-      alert(esVacio ? '¡Cierre vacío eliminado con éxito!' : '¡Cierre deshecho y sincronizado en todos los dispositivos!');
+      alert(esVacio ? '¡Cierre vacío eliminado con éxito!' : '¡Cierre deshecho con éxito! Las operaciones han regresado al dashboard.');
     }
   };
 
@@ -206,15 +219,15 @@ export default function DashboardView({
                       ) : esUltimo && (
                         <button
                           onClick={() => deshacerCierre()}
-                          disabled={totalOpsCerrables > 0}
-                          title={totalOpsCerrables > 0 ? "Bloqueado por seguridad: Ya hay operaciones en el nuevo turno" : "Deshacer este cierre"}
+                          disabled={seRegistraronOpsDespues}
+                          title={seRegistraronOpsDespues ? "Bloqueado por seguridad: Ya se registraron operaciones después de este cierre" : "Deshacer este cierre"}
                           className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition-colors border shadow-sm ${
-                            totalOpsCerrables > 0 
+                            seRegistraronOpsDespues 
                               ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed opacity-70' 
                               : 'bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white border-red-500/30'
                           }`}
                         >
-                          {totalOpsCerrables > 0 ? '🔒 Cierre Bloqueado' : '↩️ Deshacer Cierre'}
+                          {seRegistraronOpsDespues ? '🔒 Cierre Bloqueado' : '↩️ Deshacer Cierre'}
                         </button>
                       )}
                     </div>
